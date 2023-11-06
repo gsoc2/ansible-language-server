@@ -8,7 +8,7 @@ import {
   TextEdit,
 } from "vscode-languageserver";
 import { Position, TextDocument } from "vscode-languageserver-textdocument";
-import { Node, Scalar, YAMLMap } from "yaml/types";
+import { isScalar, Node, YAMLMap } from "yaml";
 import { IOption } from "../interfaces/module";
 import { WorkspaceFolderContext } from "../services/workspaceManager";
 import {
@@ -33,7 +33,10 @@ import {
   isTaskParam,
   parseAllDocuments,
   getPossibleOptionsForPath,
+  isCursorInsideJinjaBrackets,
+  isPlaybook,
 } from "../utils/yaml";
+import { getVarsCompletion } from "./completionProviderUtils";
 
 const priorityMap = {
   nameKeyword: 1,
@@ -49,18 +52,42 @@ const priorityMap = {
   choice: 2,
 };
 
+let dummyMappingCharacter: string;
+let isAnsiblePlaybook: boolean;
+
 export async function doCompletion(
   document: TextDocument,
   position: Position,
   context: WorkspaceFolderContext,
 ): Promise<CompletionItem[] | null> {
+  isAnsiblePlaybook = isPlaybook(document);
+
   let preparedText = document.getText();
   const offset = document.offsetAt(position);
+
   // HACK: We need to insert a dummy mapping, so that the YAML parser can properly recognize the scope.
-  // This is particularly important when parser has nothing more than
-  // indentation to determine the scope of the current line. `_:` is ok here,
-  // since we expect to work on a Pair level
-  preparedText = insert(preparedText, offset, "_:");
+  // This is particularly important when parser has nothing more than indentation to
+  // determine the scope of the current line.
+
+  // This is handled w.r.t two scenarios:
+  // 1. When we are at the key level, we use `_:` since we expect to work on a pair level.
+  // 2. When we are at the value level, we use `__`. We do this because based on the above hack, the
+  // use of `_:` at the value level creates invalid YAML as `: ` is an incorrect token in yaml string scalar
+
+  dummyMappingCharacter = "_:";
+
+  const previousCharactersOfCurrentLine = document.getText({
+    start: { line: position.line, character: 0 },
+    end: { line: position.line, character: position.character },
+  });
+
+  if (previousCharactersOfCurrentLine.includes(": ")) {
+    // this means we have encountered ": " previously in the same line and thus we are
+    // at the value level
+    dummyMappingCharacter = "__";
+  }
+
+  preparedText = insert(preparedText, offset, dummyMappingCharacter);
   const yamlDocs = parseAllDocuments(preparedText);
 
   const extensionSettings = await context.documentSettings.get(document.uri);
@@ -143,7 +170,9 @@ export async function doCompletion(
           );
 
           // offer modules
-          const moduleCompletionItems = [...docsLibrary.moduleFqcns]
+          const moduleCompletionItems = [
+            ...(await docsLibrary.getModuleFqcns(document.uri)),
+          ]
             .filter(
               (moduleFqcn) =>
                 provideRedirectModulesCompletion ||
@@ -164,6 +193,7 @@ export async function doCompletion(
                 ? `${insertName}:${resolveSuffix(
                     "dict", // since a module is always a dictionary
                     cursorAtFirstElementOfList,
+                    isAnsiblePlaybook,
                   )}`
                 : insertName;
               return {
@@ -192,6 +222,18 @@ export async function doCompletion(
           completionItems.push(...moduleCompletionItems);
         }
         return completionItems;
+      }
+
+      // Provide variable auto-completion if the cursor is inside valid jinja inline brackets in a playbook
+      if (
+        isAnsiblePlaybook &&
+        isCursorInsideJinjaBrackets(document, position, path)
+      ) {
+        const varCompletion: CompletionItem[] = getVarsCompletion(
+          document.uri,
+          path,
+        );
+        return varCompletion;
       }
 
       // Check if we're looking for module options or sub-options
@@ -282,11 +324,11 @@ export async function doCompletion(
       // establish path for the key (option/sub-option name)
       if (new AncestryBuilder(path).parent(YAMLMap).getValue() === null) {
         keyPath = new AncestryBuilder(path)
-          .parent(YAMLMap) // compensates for `_:`
+          .parent(YAMLMap) // compensates for DUMMY MAPPING
           .parent(YAMLMap)
           .getKeyPath();
       } else {
-        // in this case there is a character immediately after `_:`, which
+        // in this case there is a character immediately after DUMMY MAPPING, which
         // prevents formation of nested map
         keyPath = new AncestryBuilder(path).parent(YAMLMap).getKeyPath();
       }
@@ -299,12 +341,12 @@ export async function doCompletion(
         );
         if (
           keyOptions &&
-          keyNode instanceof Scalar &&
-          keyOptions.has(keyNode.value)
+          isScalar(keyNode) &&
+          keyOptions.has(keyNode.value as string)
         ) {
           const nodeRange = getNodeRange(node, document);
 
-          const option = keyOptions.get(keyNode.value);
+          const option = keyOptions.get(keyNode.value as string);
           const choices = [];
           let defaultChoice = option.default;
           if (option.type === "bool" && typeof option.default === "string") {
@@ -352,14 +394,17 @@ export async function doCompletion(
       // check for 'hosts' keyword and 'ansible_host keyword under vars' to provide inventory auto-completion
       let keyPathForHosts: Node[] | null;
 
-      if (new AncestryBuilder(path).parent(YAMLMap).getValue() === null) {
+      if (
+        new AncestryBuilder(path).parent(YAMLMap).getValue() &&
+        new AncestryBuilder(path).parent(YAMLMap).getValue()["value"] === null
+      ) {
         keyPathForHosts = new AncestryBuilder(path)
-          .parent(YAMLMap) // compensates for `_:`
+          .parent(YAMLMap) // compensates for DUMMY MAPPING
           .parent(YAMLMap)
           .getKeyPath();
       } else {
         keyPathForHosts = new AncestryBuilder(path)
-          .parent(YAMLMap) // compensates for `_:`
+          .parent(YAMLMap) // compensates for DUMMY MAPPING
           .getKeyPath();
       }
       if (keyPathForHosts) {
@@ -447,16 +492,16 @@ function getHostCompletion(hostObjectList): CompletionItem[] {
 }
 
 /**
- * Returns an LSP formatted range compensating for the `_:` hack, provided that
+ * Returns an LSP formatted range compensating for the DUMMY MAPPING hack, provided that
  * the node has range information and is a string scalar.
  */
 function getNodeRange(node: Node, document: TextDocument): Range | undefined {
   const range = getOrigRange(node);
-  if (range && node instanceof Scalar && typeof node.value === "string") {
+  if (range && isScalar(node) && typeof node.value === "string") {
     const start = range[0];
     let end = range[1];
-    // compensate for `_:`
-    if (node.value.includes("_:")) {
+    // compensate for DUMMY MAPPING
+    if (node.value.includes(dummyMappingCharacter)) {
       end -= 2;
     } else {
       // colon, being at the end of the line, was excluded from the node
@@ -515,6 +560,7 @@ export async function doCompletionResolve(
         ? `${insertName}:${resolveSuffix(
             "dict", // since a module is always a dictionary
             completionItem.data.firstElementOfList,
+            isAnsiblePlaybook,
           )}`
         : insertName;
 
@@ -540,6 +586,7 @@ export async function doCompletionResolve(
       ? `${completionItem.label}:${resolveSuffix(
           completionItem.data.type,
           completionItem.data.firstElementOfList,
+          isAnsiblePlaybook,
         )}`
       : `${completionItem.label}`;
 
@@ -579,19 +626,40 @@ function firstElementOfList(document: TextDocument, nodeRange: Range): boolean {
   return elementsBeforeKey === "-";
 }
 
-function resolveSuffix(optionType: string, firstElementOfList: boolean) {
+export function resolveSuffix(
+  optionType: string,
+  firstElementOfList: boolean,
+  isDocPlaybook: boolean,
+) {
   let returnSuffix: string;
 
-  switch (optionType) {
-    case "list":
-      returnSuffix = firstElementOfList ? `${EOL}\t\t- ` : `${EOL}\t- `;
-      break;
-    case "dict":
-      returnSuffix = firstElementOfList ? `${EOL}\t\t` : `${EOL}\t`;
-      break;
-    default:
-      returnSuffix = " ";
-      break;
+  if (isDocPlaybook) {
+    // if doc is a playbook, indentation will shift one tab since a play is a list
+    switch (optionType) {
+      case "list":
+        returnSuffix = firstElementOfList ? `${EOL}\t\t- ` : `${EOL}\t- `;
+        break;
+      case "dict":
+        returnSuffix = firstElementOfList ? `${EOL}\t\t` : `${EOL}\t`;
+        break;
+      default:
+        returnSuffix = " ";
+        break;
+    }
+  } else {
+    // if doc is not a playbook (any other ansible file like task file, etc.) indentation will not
+    // include that extra tab
+    switch (optionType) {
+      case "list":
+        returnSuffix = `${EOL}\t- `;
+        break;
+      case "dict":
+        returnSuffix = `${EOL}\t`;
+        break;
+      default:
+        returnSuffix = " ";
+        break;
+    }
   }
 
   return returnSuffix;

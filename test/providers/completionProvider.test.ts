@@ -1,7 +1,10 @@
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { expect } from "chai";
-import { Position } from "vscode-languageserver";
-import { doCompletion } from "../../src/providers/completionProvider";
+import { Position, CompletionItemKind } from "vscode-languageserver";
+import {
+  doCompletion,
+  doCompletionResolve,
+} from "../../src/providers/completionProvider";
 import {} from "../../src/providers/validationProvider";
 import { WorkspaceFolderContext } from "../../src/services/workspaceManager";
 import {
@@ -490,6 +493,102 @@ function testModuleNamesWithoutFQCN(
   });
 }
 
+function testPlaybookAdjacentCollection(
+  context: WorkspaceFolderContext,
+  textDoc: TextDocument,
+) {
+  const tests = [
+    {
+      name: "playbook adjacent module (adjacent_org.adjacent_coll.module_1)",
+      position: { line: 5, character: 19 } as Position,
+      triggerCharacter: "adjacent_org.",
+      completion: "adjacent_org.adjacent_coll.module_1",
+    },
+    {
+      name: "playbook adjacent module option (adjacent_org.adjacent_coll.module_1 -> opt_1)",
+      position: { line: 6, character: 11 } as Position,
+      triggerCharacter: "opt",
+      completion: "opt_1",
+    },
+    {
+      name: "playbook adjacent module sub option (adjacent_org.adjacent_coll.module_1 -> opt_1 -> sub_opt_1)",
+      position: { line: 7, character: 19 } as Position,
+      triggerCharacter: "sub_opt",
+      completion: "sub_opt_1",
+    },
+  ];
+
+  tests.forEach(({ name, position, triggerCharacter, completion }) => {
+    it(`should provide completion for ${name}`, async function () {
+      const actualCompletion = await doCompletion(textDoc, position, context);
+
+      const filteredCompletion = smartFilter(
+        actualCompletion,
+        triggerCharacter,
+      );
+
+      if (!completion) {
+        expect(filteredCompletion.length).be.equal(0);
+      } else {
+        if (!filteredCompletion[0].item) {
+          expect(filteredCompletion[0].label).be.equal(completion);
+          expect(filteredCompletion[0].textEdit.newText).be.equal(completion);
+        } else {
+          expect(filteredCompletion[0].item.label).to.be.equal(completion);
+          expect(filteredCompletion[0].item.textEdit.newText).be.equal(
+            completion,
+          );
+        }
+      }
+    });
+  });
+}
+
+function testNonPlaybookAdjacentCollection(
+  context: WorkspaceFolderContext,
+  textDoc: TextDocument,
+) {
+  const tests = [
+    {
+      name: "non playbook adjacent module (adjacent_org.adjacent_coll.module_1)",
+      position: { line: 5, character: 19 } as Position,
+      triggerCharacter: "adjacent_org.",
+      completion: "",
+    },
+    {
+      name: "non playbook adjacent module option (adjacent_org.adjacent_coll.module_1 -> opt_1)",
+      position: { line: 6, character: 11 } as Position,
+      triggerCharacter: "opt",
+      completion: "",
+    },
+  ];
+
+  tests.forEach(({ name, position, triggerCharacter, completion }) => {
+    it(`should not provide completion for ${name}`, async function () {
+      const actualCompletion = await doCompletion(textDoc, position, context);
+
+      const filteredCompletion = smartFilter(
+        actualCompletion,
+        triggerCharacter,
+      );
+
+      if (!completion) {
+        expect(filteredCompletion.length).be.equal(0);
+      } else {
+        if (!filteredCompletion[0].item) {
+          expect(filteredCompletion[0].label).be.equal(completion);
+          expect(filteredCompletion[0].textEdit.newText).be.equal(completion);
+        } else {
+          expect(filteredCompletion[0].item.label).to.be.equal(completion);
+          expect(filteredCompletion[0].item.textEdit.newText).be.equal(
+            completion,
+          );
+        }
+      }
+    });
+  });
+}
+
 function testHostValues(
   context: WorkspaceFolderContext,
   textDoc: TextDocument,
@@ -541,6 +640,120 @@ function testHostValues(
       } else {
         expect(filteredCompletion).be.deep.equal(completion);
       }
+    });
+  });
+}
+
+function testVarsCompletionInsideJinja(
+  context: WorkspaceFolderContext,
+  textDoc: TextDocument,
+) {
+  const tests = [
+    {
+      name: "variables defined at task level",
+      position: { line: 36, character: 17 } as Position,
+      triggerCharacter: "",
+      completion: ["url", "home", "os", "password", "username"],
+    },
+    {
+      name: "variables defined at block level",
+      position: { line: 30, character: 47 } as Position,
+      triggerCharacter: "var",
+      completion: ["task_var", "block_var_1", "block_var_2"],
+    },
+    {
+      name: "variables defined at play level",
+      position: { line: 14, character: 35 } as Position,
+      triggerCharacter: "",
+      completion: ["home", "os", "password", "username"],
+    },
+    {
+      name: "variables defined inside a vars file",
+      position: { line: 51, character: 33 } as Position,
+      triggerCharacter: "",
+      completion: [
+        "filepath",
+        "mode",
+        "default_var_1",
+        "default_var_2",
+        "default_var_3",
+      ],
+    },
+  ];
+
+  tests.forEach(({ name, position, triggerCharacter, completion }) => {
+    it(`should provide completion for ${name}`, async function () {
+      const actualCompletion = await doCompletion(textDoc, position, context);
+
+      const filteredCompletion = smartFilter(
+        actualCompletion,
+        triggerCharacter,
+      ).map((completion) => {
+        if (!completion.item) {
+          return completion.label;
+        } else {
+          return completion.item.label;
+        }
+      });
+
+      if (!completion) {
+        expect(filteredCompletion.length).be.equal(0);
+      } else {
+        expect(filteredCompletion).be.deep.equal(completion);
+      }
+    });
+  });
+}
+
+function testModuleKindAndDocumentation(
+  context: WorkspaceFolderContext,
+  textDoc: TextDocument,
+) {
+  const tests = [
+    {
+      moduleName: "org_1.coll_6.module_1",
+      kind: CompletionItemKind.Reference,
+      documentation:
+        "***Redirected to: org_1.coll_6.sub_coll_1.module_1***\n\n*Test module*\n\n**Description**\n\n- This is a test module 1\n\n**Notes**\n\n- This is a dummy module",
+    },
+    {
+      moduleName: "org_1.coll_6.module_2",
+      kind: CompletionItemKind.Class,
+      documentation:
+        "*Test module*\n\n**Description**\n\n- This is a test module 2\n\n**Notes**\n\n- This is a dummy module",
+    },
+    {
+      moduleName: "org_1.coll_6.sub_coll_1.module_1",
+      kind: CompletionItemKind.Class,
+      documentation:
+        "*Test module*\n\n**Description**\n\n- This is a test module 1\n\n**Notes**\n\n- This is a dummy module",
+    },
+    {
+      moduleName: "org_1.coll_6.sub_coll_1.module_2",
+      kind: CompletionItemKind.Reference,
+      documentation:
+        "**DEPRECATED**\n\nUsage of org_1.coll_6.sub_coll_1.module_2 is deprecated.\n\nRemoval date: undefined, removal version: undefined\n\n***Redirected to: org_1.coll_6.module_2***\n\n*Test module*\n\n**Description**\n\n- This is a test module 2\n\n**Notes**\n\n- This is a dummy module",
+    },
+  ];
+
+  tests.forEach(({ moduleName, kind, documentation }) => {
+    let resolvedItem;
+    const position = { line: 34, character: 19 } as Position;
+
+    before(async () => {
+      const completion = await doCompletion(textDoc, position, context);
+      const filteredCompletion = completion.filter(
+        (item) => item.label === moduleName,
+      );
+      expect(filteredCompletion.length).be.equal(1);
+      expect(filteredCompletion[0].label).be.equal(moduleName);
+      resolvedItem = await doCompletionResolve(filteredCompletion[0], context);
+    });
+    it(`should provide completion kind ${kind} for ${moduleName}`, () => {
+      expect(resolvedItem.kind).be.equal(kind);
+    });
+    it(`should provide documentation for ${moduleName}`, () => {
+      expect(resolvedItem.documentation["value"]).be.equal(documentation);
     });
   });
 }
@@ -679,13 +892,13 @@ describe("doCompletion()", () => {
     });
   });
 
-  describe("Completion for task keywords", () => {
-    fixtureFilePath = "completion/simple_tasks.yml";
-    fixtureFileUri = resolveDocUri(fixtureFilePath);
-    context = workspaceManager.getContext(fixtureFileUri);
-    textDoc = getDoc(fixtureFilePath);
-    docSettings = context.documentSettings.get(textDoc.uri);
+  fixtureFilePath = "completion/simple_tasks.yml";
+  fixtureFileUri = resolveDocUri(fixtureFilePath);
+  context = workspaceManager.getContext(fixtureFileUri);
+  textDoc = getDoc(fixtureFilePath);
+  docSettings = context.documentSettings.get(textDoc.uri);
 
+  describe("Completion for task keywords", () => {
     describe("With EE enabled @ee", () => {
       before(async () => {
         setFixtureAnsibleCollectionPathEnv(
@@ -735,6 +948,33 @@ describe("doCompletion()", () => {
       });
 
       testModuleNames(context, textDoc);
+    });
+  });
+
+  describe("Check module kind and documentation of completion item", () => {
+    describe("With EE enabled @ee", () => {
+      before(async () => {
+        setFixtureAnsibleCollectionPathEnv(
+          "/home/runner/.ansible/collections:/usr/share/ansible",
+        );
+        await enableExecutionEnvironmentSettings(docSettings);
+      });
+
+      testModuleKindAndDocumentation(context, textDoc);
+
+      after(async () => {
+        setFixtureAnsibleCollectionPathEnv();
+        await disableExecutionEnvironmentSettings(docSettings);
+      });
+    });
+
+    describe("With EE disabled", () => {
+      before(async () => {
+        setFixtureAnsibleCollectionPathEnv();
+        await disableExecutionEnvironmentSettings(docSettings);
+      });
+
+      testModuleKindAndDocumentation(context, textDoc);
     });
   });
 
@@ -792,13 +1032,13 @@ describe("doCompletion()", () => {
     });
   });
 
-  describe("Completion for module name without FQCN", () => {
-    fixtureFilePath = "completion/tasks_without_fqcn.yml";
-    fixtureFileUri = resolveDocUri(fixtureFilePath);
-    context = workspaceManager.getContext(fixtureFileUri);
-    textDoc = getDoc(fixtureFilePath);
-    docSettings = context.documentSettings.get(textDoc.uri);
+  fixtureFilePath = "completion/tasks_without_fqcn.yml";
+  fixtureFileUri = resolveDocUri(fixtureFilePath);
+  context = workspaceManager.getContext(fixtureFileUri);
+  textDoc = getDoc(fixtureFilePath);
+  docSettings = context.documentSettings.get(textDoc.uri);
 
+  describe("Completion for module name without FQCN", () => {
     describe("With EE enabled @ee", () => {
       before(async () => {
         setFixtureAnsibleCollectionPathEnv(
@@ -822,6 +1062,106 @@ describe("doCompletion()", () => {
       });
 
       testModuleNamesWithoutFQCN(context, textDoc);
+    });
+  });
+
+  describe("Completion for variables inside jinja inline brackets", () => {
+    fixtureFilePath = "completion/playbook_with_vars.yml";
+    fixtureFileUri = resolveDocUri(fixtureFilePath);
+    context = workspaceManager.getContext(fixtureFileUri);
+    textDoc = getDoc(fixtureFilePath);
+    docSettings = context.documentSettings.get(textDoc.uri);
+
+    describe("With EE enabled @ee", () => {
+      before(async () => {
+        setFixtureAnsibleCollectionPathEnv(
+          "/home/runner/.ansible/collections:/usr/share/ansible",
+        );
+        await enableExecutionEnvironmentSettings(docSettings);
+      });
+
+      testVarsCompletionInsideJinja(context, textDoc);
+
+      after(async () => {
+        setFixtureAnsibleCollectionPathEnv();
+        await disableExecutionEnvironmentSettings(docSettings);
+      });
+    });
+
+    describe("With EE disabled", () => {
+      before(async () => {
+        setFixtureAnsibleCollectionPathEnv();
+        await disableExecutionEnvironmentSettings(docSettings);
+      });
+
+      testVarsCompletionInsideJinja(context, textDoc);
+    });
+  });
+
+  fixtureFilePath = "playbook_adjacent_collection/playbook.yml";
+  fixtureFileUri = resolveDocUri(fixtureFilePath);
+  context = workspaceManager.getContext(fixtureFileUri);
+  textDoc = getDoc(fixtureFilePath);
+  docSettings = context.documentSettings.get(textDoc.uri);
+
+  describe("Completion for playbook adjacent collection", () => {
+    describe("With EE enabled @ee", () => {
+      before(async () => {
+        setFixtureAnsibleCollectionPathEnv(
+          "/home/runner/.ansible/collections:/usr/share/ansible",
+        );
+        await enableExecutionEnvironmentSettings(docSettings);
+      });
+
+      testPlaybookAdjacentCollection(context, textDoc);
+
+      after(async () => {
+        setFixtureAnsibleCollectionPathEnv();
+        await disableExecutionEnvironmentSettings(docSettings);
+      });
+    });
+
+    describe("With EE disabled", () => {
+      before(async () => {
+        setFixtureAnsibleCollectionPathEnv();
+        await disableExecutionEnvironmentSettings(docSettings);
+      });
+
+      testPlaybookAdjacentCollection(context, textDoc);
+    });
+  });
+
+  fixtureFilePath =
+    "playbook_adjacent_collection/non_adjacent_playbooks/playbook2.yml";
+  fixtureFileUri = resolveDocUri(fixtureFilePath);
+  context = workspaceManager.getContext(fixtureFileUri);
+  textDoc = getDoc(fixtureFilePath);
+  docSettings = context.documentSettings.get(textDoc.uri);
+
+  describe("Negate completion for non playbook adjacent collection", () => {
+    describe("With EE enabled @ee", () => {
+      before(async () => {
+        setFixtureAnsibleCollectionPathEnv(
+          "/home/runner/.ansible/collections:/usr/share/ansible",
+        );
+        await enableExecutionEnvironmentSettings(docSettings);
+      });
+
+      testNonPlaybookAdjacentCollection(context, textDoc);
+
+      after(async () => {
+        setFixtureAnsibleCollectionPathEnv();
+        await disableExecutionEnvironmentSettings(docSettings);
+      });
+    });
+
+    describe("With EE disabled", () => {
+      before(async () => {
+        setFixtureAnsibleCollectionPathEnv();
+        await disableExecutionEnvironmentSettings(docSettings);
+      });
+
+      testNonPlaybookAdjacentCollection(context, textDoc);
     });
   });
 });

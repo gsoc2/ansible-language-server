@@ -3,9 +3,9 @@
 # This tool is used to setup the environment for running the tests. Its name
 # name and location is based on Zuul CI, which can automatically run it.
 # (cspell: disable-next-line)
-set -exuo pipefail
+set -euo pipefail
 
-IMAGE=ghcr.io/ansible/creator-ee:latest
+IMAGE=ghcr.io/ansible/creator-ee:$(./tools/get-image-version)
 PIP_LOG_FILE=out/log/pip.log
 HOSTNAME="${HOSTNAME:-localhost}"
 ERR=0
@@ -176,11 +176,14 @@ fi
 # shellcheck disable=SC1091
 . "${VIRTUAL_ENV}/bin/activate"
 
+log notice "Upgrading pip ..."
 python3 -m pip install -q -U pip
 
+EE_VERSION=$(./tools/get-image-version)
 if [[ $(uname || true) != MINGW* ]]; then # if we are not on pure Windows
-    python3 -m pip install \
-        -c .config/requirements.txt -r .config/requirements.in
+    URL="https://raw.githubusercontent.com/ansible/creator-ee/${EE_VERSION}/_build/requirements.txt"
+    log notice "Installing dependencies from .config/requirements.in and ${URL} loaded from .config/Containerfile ..."
+    python3 -m pip install -r "${URL}" -r .config/requirements.in
 fi
 
 # GHA failsafe only: ensure ansible and ansible-lint cannot be found anywhere
@@ -269,9 +272,9 @@ if [[ "${PODMAN_VERSION}" != 'null' ]] && [[ "${SKIP_PODMAN:-}" != '1' ]]; then
     podman pull --quiet "${IMAGE}" >/dev/null
     # without running we will never be sure it works (no arm64 image yet)
     EE_ANSIBLE_VERSION=$(get_version \
-        podman run -i ${IMAGE} ansible --version)
+        podman run -i "${IMAGE}" ansible --version)
     EE_ANSIBLE_LINT_VERSION=$(get_version \
-        podman run -i ${IMAGE} ansible-lint --version)
+        podman run -i "${IMAGE}" ansible-lint --version)
 fi
 
 echo "Performing sanity check for current container engine."

@@ -53,16 +53,6 @@ _default value:
 Extra parameters passed to the container engine command example: &#x27;--net&#x3D;host&#x27; \
 _default value:
 `""`_
-- **ansible.executionEnvironment.volumeMounts**:
-  - **src**: The name of the local volume or path to be mounted within execution environment. \
-  _default value:
-`""`_
-  - **dest**: The path where the file or directory are mounted in the container. \
-  _default value:
-`""`_
-  - **options**: The field is optional, and is a comma-separated list of options, such as ro,Z \
-  _default value:
-`""`_
 
 - **ansible.completion.provideRedirectModules**:
 Toggle redirected module provider when completing modules \
@@ -93,3 +83,15 @@ _default value:
 Optional command line arguments to be appended to ansible-lint invocation \
 _default value:
 `""`_
+
+- **ansible.executionEnvironment.volumeMounts**:
+  - **src**: The name of the local volume or path to be mounted within execution environment.
+  _default value:
+`""`_
+  - **dest**: The path where the file or directory are mounted in the container.
+  _default value:
+`""`_
+  - **options**: The field is optional, and is a comma-separated list of options, such as ro,Z
+  _default value:
+`""`_
+

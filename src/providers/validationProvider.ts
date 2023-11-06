@@ -1,11 +1,8 @@
 import IntervalTree from "@flatten-js/interval-tree";
-import * as _ from "lodash";
 import {
   Connection,
   Diagnostic,
-  DiagnosticRelatedInformation,
   DiagnosticSeverity,
-  Location,
   Range,
 } from "vscode-languageserver";
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -39,7 +36,7 @@ export async function doValidate(
 
     const settings = await context.documentSettings.get(textDocument.uri);
     if (!settings.validation.enabled) {
-      console.log("Validation disabled");
+      connection?.console.log("Validation disabled");
 
       // this is done to remove the cache as well
       const blankDiagnostics = new Map<string, Diagnostic[]>();
@@ -55,13 +52,12 @@ export async function doValidate(
       const lintExecutable = settings.executionEnvironment.enabled
         ? "ansible-lint"
         : settings.validation.lint.path;
-      const lintAvailability = await commandRunner.getExecutablePath(
-        lintExecutable,
-      );
-      console.debug("Path for lint: ", lintAvailability);
+      const lintAvailability =
+        await commandRunner.getExecutablePath(lintExecutable);
+      connection?.console.log(`Path for lint: ${lintAvailability}`);
 
       if (lintAvailability) {
-        console.debug("Validating using ansible-lint");
+        connection?.console.log("Validating using ansible-lint");
         diagnosticsByFile = await context.ansibleLint.doValidate(textDocument);
       } else {
         connection?.window.showErrorMessage(
@@ -72,15 +68,14 @@ export async function doValidate(
 
     // validate using ansible-playbook --syntax-check
     else {
-      console.debug("Validating using ansible syntax-check");
+      connection?.console.log("Validating using ansible syntax-check");
 
       if (isPlaybook(textDocument)) {
-        console.debug("playbook file");
-        diagnosticsByFile = await context.ansiblePlaybook.doValidate(
-          textDocument,
-        );
+        connection?.console.log("playbook file");
+        diagnosticsByFile =
+          await context.ansiblePlaybook.doValidate(textDocument);
       } else {
-        console.debug("non-playbook file");
+        connection?.console.log("non-playbook file");
         diagnosticsByFile = new Map<string, Diagnostic[]>();
       }
     }
@@ -105,32 +100,25 @@ export async function doValidate(
 
 export function getYamlValidation(textDocument: TextDocument): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
-  const yDocuments = parseAllDocuments(textDocument.getText(), {
-    prettyErrors: false,
-  });
+  const yDocuments = parseAllDocuments(textDocument.getText());
   const rangeTree = new IntervalTree<Diagnostic>();
   yDocuments.forEach((yDoc) => {
     yDoc.errors.forEach((error) => {
-      const errorRange = error.range || error.source?.range;
-      let range;
-      if (errorRange) {
+      const [errStart, errEnd] = error.pos;
+      if (errStart) {
         const start = textDocument.positionAt(
-          errorRange.origStart !== undefined
-            ? errorRange.origStart
-            : errorRange.start,
+          errStart !== undefined ? errStart : null,
         );
-        const end = textDocument.positionAt(
-          errorRange.origEnd !== undefined
-            ? errorRange.origEnd
-            : errorRange.end,
-        );
-        range = Range.create(start, end);
 
-        let severity;
+        const end = textDocument.positionAt(
+          errEnd !== undefined ? errEnd : null,
+        );
+
+        const range = Range.create(start, end);
+
+        let severity: DiagnosticSeverity;
         switch (error.name) {
-          case "YAMLReferenceError":
-          case "YAMLSemanticError":
-          case "YAMLSyntaxError":
+          case "YAMLParseError":
             severity = DiagnosticSeverity.Error;
             break;
           case "YAMLWarning":
@@ -140,7 +128,7 @@ export function getYamlValidation(textDocument: TextDocument): Diagnostic[] {
             severity = DiagnosticSeverity.Information;
             break;
         }
-        rangeTree.insert([errorRange.start, errorRange.end], {
+        rangeTree.insert([error.linePos[0].line, error.linePos[1].line], {
           message: error.message,
           range: range || Range.create(0, 0, 0, 0),
           severity: severity,
@@ -150,35 +138,6 @@ export function getYamlValidation(textDocument: TextDocument): Diagnostic[] {
     });
   });
   rangeTree.forEach((range, diag) => {
-    const searchResult = rangeTree.search(range);
-    if (searchResult) {
-      const allRangesAreEqual = searchResult.every((foundDiag: Diagnostic) => {
-        // (range start == range end) in case it has already been collapsed
-        return (
-          foundDiag.range.start === foundDiag.range.end ||
-          _.isEqual(foundDiag.range, diag.range)
-        );
-      });
-      if (!allRangesAreEqual) {
-        // Prevent large error scopes hiding/obscuring other error scopes
-        // In YAML this is very common in case of syntax errors
-        const range = diag.range;
-        diag.relatedInformation = [
-          DiagnosticRelatedInformation.create(
-            Location.create(textDocument.uri, {
-              start: range.end,
-              end: range.end,
-            }),
-            "the scope of this error ends here",
-          ),
-        ];
-        // collapse the range
-        diag.range = {
-          start: range.start,
-          end: range.start,
-        };
-      }
-    }
     diagnostics.push(diag);
   });
 

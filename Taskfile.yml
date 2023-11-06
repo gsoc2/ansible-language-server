@@ -12,6 +12,8 @@ vars:
     [ -z "$NVM_DIR" ] && export NVM_DIR="$HOME/.nvm";
     [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" --silent;
     [ -s "/usr/local/opt/nvm/nvm.sh" ] && . "/usr/local/opt/nvm/nvm.sh";
+  EE_VERSION:
+    sh: ./tools/get-image-version
 tasks:
   default:
     desc: Run most commands
@@ -34,8 +36,6 @@ tasks:
       - ./tools/vscode.sh
   docs:
     desc: Build the documentation
-    vars:
-      sphinx_common_args: '-j auto --color -a -n -W --keep-going -T -d "../out/.doctrees" . "../out/docs_out"'
     deps:
       - setup
     cmds:
@@ -44,10 +44,7 @@ tasks:
       - git fetch --tags
       - npm run generate-settings-readme
       - source $VIRTUAL_ENV/bin/activate &&
-        cd docs &&
-        python -m sphinx -b html {{.sphinx_common_args}} &&
-        python -m sphinx -b linkcheck {{.sphinx_common_args}} &&
-        python ../tools/docs_summary.py
+        mkdocs build --strict
 
   setup:
     desc: Install dependencies
@@ -84,7 +81,6 @@ tasks:
     deps:
       - setup
     cmds:
-      - bash -c "PIP_CONSTRAINTS= $VIRTUAL_ENV/bin/python -m piptools compile -q --no-header --strip-extras --no-annotate .config/requirements.in -o .config/requirements.txt"
       - $VIRTUAL_ENV/bin/python -m pre_commit autoupdate
       # bumps some developments dependencies
       - npx ncu -u --dep dev
@@ -118,9 +114,9 @@ tasks:
     deps:
       - build
     cmds:
-      - "{{.ENGINE}} pull ghcr.io/ansible/creator-ee:latest"
+      - "{{.ENGINE}} pull ghcr.io/ansible/creator-ee:{{ .EE_VERSION }}"
       # Tests that container engine is functional and that we have the image:
-      - "{{.ENGINE}} run -i ghcr.io/ansible/creator-ee:latest ansible-lint --version"
+      - "{{.ENGINE}} run -i ghcr.io/ansible/creator-ee:{{ .EE_VERSION }} ansible-lint --version"
       - >
         source $VIRTUAL_ENV/bin/activate &&
         command -v ansible-lint &&
@@ -159,8 +155,8 @@ tasks:
     deps:
       - build
     sources:
-      - CHANGELOG.md
-      - README.md
+      - docs/changelog.md
+      - docs/README.md
       - package*.json
       - out/**/*.*
     generates:

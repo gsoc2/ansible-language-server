@@ -50,6 +50,7 @@ export function withInterpreter(
   let command = `${executable} ${args}`; // base case
 
   const newEnv = Object.assign({}, process.env, {
+    NO_COLOR: "1", // ensure none of the output produce color characters
     ANSIBLE_FORCE_COLOR: "0", // ensure output is parseable (no ANSI)
     PYTHONBREAKPOINT: "0", // We want to be sure that python debugger is never
     // triggered, even if we mistakenly left a breakpoint() there while
@@ -66,10 +67,8 @@ export function withInterpreter(
 
     const pathEntry = path.join(virtualEnv, "bin");
     if (path.isAbsolute(executable)) {
-      // if both interpreter path and absolute command path are provided, we can
-      // bolster the chances of success by letting the interpreter execute the
-      // command
-      command = `${interpreterPath} ${executable} ${args}`;
+      // if the user provided a path to the executable, we directly execute the app.
+      command = `${executable} ${args}`;
     }
 
     // emulating virtual environment activation script
